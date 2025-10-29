@@ -1,0 +1,227 @@
+function run_ekf_from_save()
+% RUN_EKF_FROM_SAVE
+% Loads a previously saved Lorenz-63 experiment from saves/*.mat
+% and runs an Extended Kalman Filter (EKF) using tl_adj.m and modeuler().
+%
+% Outputs:
+%   - Prints bias and RMSE at analysis times
+%   - Plots: truth vs analysis; innovation magnitude
+%   - Saves EKF results to saves/ekf_<timestamp>.mat
+%
+% Assumes the saved .mat contains:
+%   A,B,C, dt, ns, T, fT, xtrue (3 x (T+fT)), y (3 x NM), Q, R, Bcov, xb, etc.
+
+clear all; clc;
+
+%% -------- Load .mat file from saves 
+saveDir = 'saves';
+[file, path] = uigetfile(fullfile(saveDir, '*.mat'), 'Select a save file to load');
+if isequal(file, 0)
+    error('No .mat file selected or found in %s.', saveDir);
+end
+matPath = fullfile(path, file);
+
+
+% Load and extract base name for later save use
+S = load(matPath);
+[~, baseName, ~] = fileparts(matPath);
+fprintf('Loaded workspace: %s\n', matPath);
+
+% Unpack for readability
+A = S.A; B = S.B; C = S.C;
+dt = S.dt; ns = S.ns;
+T  = S.T;  fT = S.fT;
+xtrue = S.xtrue;            % 3 x (T+fT)
+y     = S.y;                % 3 x NM
+Q     = S.Q; R = S.R;       % Q and R! noise
+
+% INITIAL GUESS
+Bcov  = S.Bcov;
+xb    = S.xb;
+
+% Dimensions / helpers
+nx = 3; H = eye(3);         % observe all 3 components
+NM = size(y,2);
+nSteps = T + fT;
+
+% bookkeeping
+isObsStep = false(1,nSteps);
+obsIndexAtStep = zeros(1,nSteps);
+k = 0;
+for t = ns:ns:min(T, nSteps)  % observations until T (assimilation window)
+    k = k + 1;
+    isObsStep(t) = true;
+    obsIndexAtStep(t) = k;
+end
+
+%% -------- EKF initialization ----------
+xa = zeros(nx, nSteps);   % analysis state each step
+xf = zeros(nx, nSteps);   % forecast state each step
+Pa = zeros(nx, nx, nSteps); % analysis covariance
+Pf = zeros(nx, nx, nSteps); % forecast covariance
+xa(:,1) = xb;               % start from background guess and cov
+Pa(:,:,1) = Bcov;   % variance (sigma*sigma) for background variance
+
+innov = nan(nx, nSteps);   % innovation at obs times: y - H*xf
+S = nan(nx, nx, nSteps);        % innovation cov at obs times (used for NIS)
+NIS = nan(nx, nSteps);        % NIS metric
+NEES = nan(nx, nSteps);         % NEES metric
+error    = nan(nx, nSteps);   % xa - truth (for metrics)
+
+%% -------- EKF loop ----------
+for t = 1:(nSteps-1)
+    % ---- FORECAST STEP FOR EVERY DT----
+
+    % Forecasted state
+    xf(:,t+1) = modeuler(dt, xa(:,t), A, B, C);
+    
+    % Linearize (tangent) about forecasted state:
+    [F, ~] = tl_adj(dt, A, B, C, xf(:,t+1));
+
+    % EKF pred
+    Pf(:,:,t+1) = F * Pa(:,:,t) * F' + Q;
+
+    % ---- analysis step (if observation available at t+1 and within window T) ----
+    if isObsStep(t+1)
+        j = obsIndexAtStep(t+1);    % observation index 1..NM
+        yo = y(:,j);
+
+        % Innovation
+        innov(:,t+1) = yo - H*xf(:,t+1);
+        S(:,:,t+1) = H * Pf(:,:,t+1) * H' + R;
+        NIS(:,t+1) = innov(:,t+1)' * inv(S(:,:,t+1)) * innov(:,t+1);
+
+        % Kalman gain
+        K = Pf(:,:,t+1) * H' / S(:,:,t+1);
+
+        % Analysis state and covariance 
+        xa(:,t+1) = xf(:,t+1) + K * innov(:,t+1);
+        I = eye(nx);
+        Pa(:,:,t+1) = (I - K*H) * Pf(:,:,t+1);
+    else
+        % no observation: carry forecast forward
+        xa(:,t+1) = xf(:,t+1);
+        Pa(:,:,t+1) = Pf(:,:,t+1);
+    end
+
+    % error vs truth 
+    error(:,t+1) = xa(:,t+1) - xtrue(:,t+1);
+
+    % calculate NEES
+    NEES(:,t+1) = error(:,t+1)' * inv(Pa(:,:,t+1)) * error(:,t+1);
+end
+
+%% -------- State Trajectories with EKF Uncertainty (±2σ) ----------
+tgrid = (1:nSteps) * dt;
+confK = 2;  % ~95% band for Gaussian (adjust if you prefer 1σ or 3σ)
+
+% Extract per-component std dev from Pa
+sigX = sqrt(squeeze(Pa(1,1,:))).';
+sigY = sqrt(squeeze(Pa(2,2,:))).';
+sigZ = sqrt(squeeze(Pa(3,3,:))).';
+
+% Observation times
+t_obs = (ns:ns:T) * dt;
+
+figure('Name','State vs Time with EKF ±2σ bands');
+
+% ---- x ----
+subplot(3,1,1); hold on;
+x_upper = xa(1,:) + confK*sigX; 
+x_lower = xa(1,:) - confK*sigX;
+plot(tgrid, xtrue(1,:), 'k-', 'LineWidth', 2.5);                   % truth
+plot(tgrid, xa(1,:), '-', 'LineWidth', 2.5);                       % EKF est
+fill([tgrid, fliplr(tgrid)], [x_upper, fliplr(x_lower)], [0.8 0.9 1], ...
+    'EdgeColor','none','FaceAlpha',0.65);                          % ±2σ band
+plot(t_obs, y(1,:), 'r*', 'MarkerSize', 4);                        % observations
+ylabel('x'); title('x, y, z vs time (Truth, EKF, ±2σ, Observations)');
+grid on;
+
+% ---- y ----
+subplot(3,1,2); hold on;
+y_upper = xa(2,:) + confK*sigY; 
+y_lower = xa(2,:) - confK*sigY;
+plot(tgrid, xtrue(2,:), 'k-', 'LineWidth', 2.5);
+plot(tgrid, xa(2,:), '-', 'LineWidth', 2.5);
+fill([tgrid, fliplr(tgrid)], [y_upper, fliplr(y_lower)], [0.8 0.9 1], ...
+    'EdgeColor','none','FaceAlpha',0.65);
+plot(t_obs, y(2,:), 'r*', 'MarkerSize', 4);
+ylabel('y'); grid on;
+
+% ---- z ----
+subplot(3,1,3); hold on;
+z_upper = xa(3,:) + confK*sigZ; 
+z_lower = xa(3,:) - confK*sigZ;
+plot(tgrid, xtrue(3,:), 'k-', 'LineWidth', 2.5);
+plot(tgrid, xa(3,:), '-', 'LineWidth', 2.5);
+fill([tgrid, fliplr(tgrid)], [z_upper, fliplr(z_lower)], [0.8 0.9 1], ...
+    'EdgeColor','none','FaceAlpha',0.65);
+plot(t_obs, y(3,:), 'r*', 'MarkerSize', 4);
+ylabel('z'); xlabel('Time'); grid on
+legend({'Truth','EKF Estimate','EKF ±2σ','Observations'}, 'Location','best');
+
+%% RMSE / NEES / NIS ----------
+% Time axis
+tgrid = (1:nSteps) * dt;
+
+% RMSE across the 3 state components at each time
+rmse_t = sqrt(mean(error.^2, 1, 'omitnan'));  % 1 x nSteps
+
+% Degrees of freedom for bounds
+dof_nees = nx;           % state dimension
+dof_nis  = size(H,1);    % measurement dimension (MO)
+alpha = 0.95;
+plus_minus = (1 - alpha) / 2;
+
+% Chi-square consistency bounds (lower and upper)
+nees_lower = chi2inv(1 - alpha - plus_minus, dof_nees);
+nees_upper = chi2inv(alpha + plus_minus,     dof_nees);
+nis_lower  = chi2inv(1 - alpha - plus_minus, dof_nis);
+nis_upper  = chi2inv(alpha + plus_minus,     dof_nis);
+
+% Extract series
+nees_series = NEES(1,:);                 % scalar at each step
+nis_series  = NIS(1,:);                  % scalar at obs times
+t_obs       = tgrid(isObsStep);
+nis_obs     = nis_series(isObsStep);
+
+% Consistency percentages
+nees_in_bounds = mean(nees_series >= nees_lower & nees_series <= nees_upper, 'omitnan') * 100;
+nis_in_bounds  = mean(nis_obs >= nis_lower & nis_obs <= nis_upper, 'omitnan') * 100;
+
+figure('Name','EKF Metrics: RMSE / NEES / NIS');
+
+% ---- RMSE ----
+subplot(3,1,1);
+plot(tgrid, rmse_t, 'LineWidth', 1.4);
+xlabel('Time');
+ylabel('RMSE');
+meanRMSE = mean(rmse_t, 'omitnan');
+title(sprintf('RMSE vs Time.\n%.3f Average', meanRMSE));
+grid on;
+
+% ---- NEES ----
+subplot(3,1,2);
+plot(tgrid, nees_series, 'b-', 'LineWidth', 1.4); hold on;
+yline(nees_lower, '--g', sprintf('Lower 95%% (χ²_{%.2f, dof=%d}) = %.2f', 1-alpha, dof_nees, nees_lower), 'HandleVisibility','off');
+yline(nees_upper, '--r', sprintf('Upper 95%% (χ²_{%.2f, dof=%d}) = %.2f', alpha, dof_nees, nees_upper), 'HandleVisibility','off');
+xlabel('Time');
+ylabel('NEES');
+title(sprintf('NEES vs Time — Consistency bounds [%.2f, %.2f].\n %.2f Consistent.', nees_lower, nees_upper, nees_in_bounds));
+nees_xlim = xlim;
+ylim([0,15])
+grid on;
+
+% ---- NIS ----
+subplot(3,1,3);
+plot(t_obs, nis_obs, 'o-b', 'LineWidth', 1.4); hold on;
+yline(nis_lower, '--g', sprintf('Lower 95%% (χ²_{%.2f, dof=%d}) = %.2f', 1-alpha, dof_nis, nis_lower), 'HandleVisibility','off');
+yline(nis_upper, '--r', sprintf('Upper 95%% (χ²_{%.2f, dof=%d}) = %.2f', alpha, dof_nis, nis_upper), 'HandleVisibility','off');
+xlabel('Time');
+ylabel('NIS');
+title(sprintf('NIS vs Time — Consistency bounds [%.2f, %.2f].\n %.2f Consistent.', nis_lower, nis_upper, nis_in_bounds));
+xlim(nees_xlim)
+ylim([0,15])
+grid on;
+
+end

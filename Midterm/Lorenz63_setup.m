@@ -1,3 +1,4 @@
+close all;
 %-------------------------------------------------
 % PROGRAM: Filtering Experiemnt Setup for the Lorenz-63  
 %
@@ -35,7 +36,7 @@ T=T/dt;
 fT=fT/dt;
 %-----------------------
 xstr='Observation error variance';
-astr={'1.'}; % suggested input parameters
+astr={'80'}; % suggested input parameters
 temp_str=inputdlg({xstr},'',1,astr);
 varobs=str2num(temp_str{1});
 %-----------------------
@@ -122,6 +123,17 @@ subplot(3,1,2)
 plot((ns:ns:T)*dt,y(2,:),'r*')
 subplot(3,1,3)
 plot((ns:ns:T)*dt,y(3,:),'r*')
+
+
+% SAVE WORKSPACE TO .mat FILE
+saveDir = 'saves'; 
+if ~exist(saveDir, 'dir')
+    mkdir(saveDir);
+end
+fileName = [save_str{1} '.mat']; 
+fullPath = fullfile(saveDir, fileName);
+save(fullPath); % save entire workspace
+fprintf('Workspace successfully saved to: %s\n', fullPath);
 
 
 
