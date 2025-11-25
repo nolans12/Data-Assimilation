@@ -11,7 +11,7 @@ randn('state',0) % random seed
 A = 10.;
 B = 28.;
 C = 8./3.; 
-%------------------------
+%------------------------ 
 % EXPERIMENT SET-UP
 xstr='True value of x at t=0';
 ystr='True value of y at t=0';
@@ -36,7 +36,7 @@ T=T/dt;
 fT=fT/dt;
 %-----------------------
 xstr='Observation error variance';
-astr={'80'}; % suggested input parameters
+astr={'1'}; % suggested input parameters
 temp_str=inputdlg({xstr},'',1,astr);
 varobs=str2num(temp_str{1});
 %-----------------------
