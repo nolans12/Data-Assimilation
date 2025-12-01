@@ -6,7 +6,8 @@ from pathlib import Path
 import numpy as np
 from sensing import create_geo_satellites
 from target import BallisticTarget
-from tracking import Tracker
+from bias_field import bias_model, TRUE_THETA
+from ekf_tracker import EKF
 from plot import LivePlotter
 from common import ecef_to_lla
 
@@ -14,15 +15,20 @@ from common import ecef_to_lla
 SEED = 0
 rng = np.random.default_rng(SEED)
 
+# Whether to adjust measurements by bias field or not
+USE_BIAS = True
+# Whether to estimate bias field parameters and correct measurements by them or not
+ESTIMATE_BIAS = False
+
 # Meas Noise (sigma)
 NOISE_SIGMA = 10e-6 # radians
 
 # Process Noise (sigma)
-PROCESS_SIGMA = 50 / 1000 # km/s for constant velocity model
+PROCESS_SIGMA = 100 / 1000 # km/s for constant velocity model
 
 # Sim Parameters
-SIM_DURATION_S = 1200.0 # sec
-DT_S = 5.0 # how often to take a meas and update ekf
+SIM_DURATION_S = 40 * 60 # sec
+DT_S = 10.0 # how often to take a meas and update ekf
 LAUNCH = [-7.0, -42.0, 0.0] # lat, lon, alt
 IMPACT = [54.0, 160.0, 0.0] # lat, lon, alt
 MAX_ALTITUDE_KM = 250.0 # km, max alt of trajectory
@@ -65,10 +71,10 @@ def run_simulation(seed: int = 0, live_plot: bool = True) -> Path:
         noise_sigma=NOISE_SIGMA,
     )
 
-    #### CREATE ESTIMATOR ####
+    #### CREATE EKF ####
     state0, vel0 = target.state_at(0.0)
     init_state = np.concatenate([state0 + rng.normal(0, 5.0, size=3), vel0])
-    tracker = Tracker(initial_state=init_state, process_sigma=PROCESS_SIGMA)
+    ekf = EKF(initial_state=init_state, process_sigma=PROCESS_SIGMA)
 
     #### RUN SIMULATION ####
     truth = []
@@ -89,13 +95,13 @@ def run_simulation(seed: int = 0, live_plot: bool = True) -> Path:
 
         # Sample meas w/ R
         dt = t - prev_time
-        measurements = [sat.measure(t, pos, rng=rng) for sat in satellites]
+        measurements = [sat.measure(t, pos, rng=rng, USE_BIAS=USE_BIAS) for sat in satellites]
         all_measurements.extend(measurements)  
 
         # Run EKF on measuremetns at time step
-        tracker_state = tracker.step(dt, measurements)
-        estimates.append(tracker_state.state)
-        cov_diagonals.append(np.diag(tracker_state.covariance))
+        ekf_state = ekf.step(dt, measurements)
+        estimates.append(ekf_state.state)
+        cov_diagonals.append(np.diag(ekf_state.covariance))
 
         # Update live plot every 5 steps
         if plotter and idx % 5 == 0:
@@ -123,8 +129,8 @@ def run_simulation(seed: int = 0, live_plot: bool = True) -> Path:
             plotter.update(
                 time=t,
                 truth_state=truth_state,
-                est_state=tracker_state.state,
-                cov_diag=np.diag(tracker_state.covariance),
+                est_state=ekf_state.state,
+                cov_diag=np.diag(ekf_state.covariance),
                 history_times=times[:idx+1].tolist(),
                 history_truth=truth,
                 history_est=estimates,

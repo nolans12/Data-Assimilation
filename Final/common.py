@@ -5,7 +5,7 @@ def ecef_to_lla(x: float, y: float, z: float) -> tuple[float, float, float]:
     """
     Assumed given in km, so convert to meters
 
-    Output altitude in km
+    Output is: lat (deg), lon (deg), alt (km)
     """
     x = x * 1000
     y = y * 1000
@@ -40,11 +40,14 @@ def ecef_to_lla(x: float, y: float, z: float) -> tuple[float, float, float]:
 
 
 def lla_to_ecef(lat: float, lon: float, alt: float) -> npt.NDArray:
-    """Conversion of lat (rad), lon (rad), and alt (km) to ECEF coordinates in km"""
+    """Conversion of lat (deg), lon (deg), and alt (km) to ECEF coordinates in km"""
     # Define the WGS84 datum
     a = 6378137.0  # Semi-major axis (meters)
     b = 6356752.31424518  # Semi-minor axis (meters)
     e_squared = (a**2 - b**2) / a**2  # First eccentricity squared
+    
+    lat = np.radians(lat)
+    lon = np.radians(lon)
 
     # Calculate the ECEF coordinates
     N = a / np.sqrt(1 - e_squared * np.sin(lat) ** 2)

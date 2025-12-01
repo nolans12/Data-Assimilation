@@ -4,6 +4,8 @@ from __future__ import annotations
 from dataclasses import dataclass
 import numpy as np
 from numpy.typing import NDArray
+from common import ecef_to_lla, lla_to_ecef
+from bias_field import bias_model
 
 EARTH_RADIUS_KM = 6378.0
 GEO_ALTITUDE_KM = 36000.0
@@ -31,13 +33,25 @@ class GeoSatellite:
         time_s: float,
         target_pos: NDArray[np.float64],
         rng: np.random.Generator,
+        USE_BIAS: bool = False,
     ) -> Measurement:
+        # Do we want to apply the bias field to this measurement?
+        if USE_BIAS:
+            # Bias field is in Lat Lon. So convert target pos to Lat Lon, then apply bias field.
+            lat, lon, alt = ecef_to_lla(target_pos[0], target_pos[1], target_pos[2])
+            # print("Original lat, lon, alt: ", lat, lon, alt)
+            bA, bE = bias_model(lat, lon)
+            # Now conert lat lon with bias back to ECEF coordinates
+            target_pos = lla_to_ecef(lat + bA, lon + bE, alt)
+            # print("Lat, Lon, Alt after bias: ", lat + bA, lon + bE, alt)
+        
         rel = target_pos - self.position
         x, y, z = rel
         az = np.arctan2(y, x)
         rng_norm = np.linalg.norm(rel)
         elev = np.arcsin(z / rng_norm)
         noise = rng.multivariate_normal(mean=[0.0, 0.0], cov=self._R)
+        
         return Measurement(
             time=time_s,
             sat_position=self.position.copy(),

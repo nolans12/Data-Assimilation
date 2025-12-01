@@ -15,10 +15,11 @@ DATA_FILE = Path(__file__).resolve().parent / "data" / "simulation_run.npz"
 class LivePlotter:
     """Real-time ground track visualization during simulation."""
 
-    def __init__(self, zoom_extent: list[float] | None = None):
+    def __init__(self, zoom_extent: list[float] | None = None, save_frames: bool = True):
         """
         Args:
             zoom_extent: [min_lat, min_lon, max_lat, max_lon] for plot extent
+            save_frames: If True, save frames for creating animation
         """
         plt.ion()
         self.fig = plt.figure(figsize=(14, 8))
@@ -55,6 +56,16 @@ class LivePlotter:
         
         # Storage for measurement markers
         self.meas_scatter = None
+        
+        # Frame saving for animation
+        self.save_frames = save_frames
+        self.frame_dir = Path(__file__).resolve().parent / "data" / "frames"
+        self.frame_count = 0
+        if self.save_frames:
+            self.frame_dir.mkdir(parents=True, exist_ok=True)
+            # Clean old frames
+            for old_frame in self.frame_dir.glob("frame_*.png"):
+                old_frame.unlink()
 
         plt.tight_layout()
         plt.pause(0.001)
@@ -170,11 +181,12 @@ class LivePlotter:
 
         # Update legend
         if len(history_truth) == 1:
-            self.ax_ground.legend(loc="upper left", fontsize=10)
+            self.ax_ground.legend(loc="best", fontsize=10)
         
         # Add time info to title
+        time_min = time / 60.0
         self.ax_ground.set_title(
-            f"Live Ballistic Trajectory Ground Track (t={time:.1f}s)", 
+            f"Live Ballistic Trajectory Ground Track (t={time_min:.2f} min)", 
             fontsize=14, 
             weight="bold"
         )
@@ -182,9 +194,48 @@ class LivePlotter:
         self.fig.canvas.draw()
         self.fig.canvas.flush_events()
         plt.pause(0.001)
+        
+        # Save frame for animation
+        if self.save_frames:
+            frame_path = self.frame_dir / f"frame_{self.frame_count:04d}.png"
+            self.fig.savefig(frame_path, dpi=100, bbox_inches='tight')
+            self.frame_count += 1
 
     def close(self) -> None:
         plt.ioff()
+        
+        # Create animation from saved frames
+        if self.save_frames and self.frame_count > 0:
+            print(f"\nCreating animation from {self.frame_count} frames...")
+            output_dir = self.frame_dir.parent
+            
+            try:
+                import imageio
+                # Create GIF
+                gif_path = output_dir / "live_plot_animation.gif"
+                frames = []
+                for i in range(self.frame_count):
+                    frame_path = self.frame_dir / f"frame_{i:04d}.png"
+                    if frame_path.exists():
+                        frames.append(imageio.imread(frame_path))
+                
+                if frames:
+                    imageio.mimsave(gif_path, frames, fps=10, loop=0)
+                    print(f"Saved animation GIF to {gif_path}")
+                    
+                    # Try to create MP4 if ffmpeg is available
+                    try:
+                        mp4_path = output_dir / "live_plot_animation.mp4"
+                        imageio.mimsave(mp4_path, frames, fps=10, codec='libx264')
+                        print(f"Saved animation MP4 to {mp4_path}")
+                    except Exception as e:
+                        print(f"Could not create MP4 (ffmpeg may not be installed): {e}")
+                
+            except ImportError:
+                print("imageio not installed. Install with 'pip install imageio' to create animations.")
+            except Exception as e:
+                print(f"Error creating animation: {e}")
+        
         plt.show()
 
 
@@ -255,8 +306,8 @@ def plot_final_results(data_path: Path = DATA_FILE, zoom_extent: list[float] | N
     
     # 1. Altitude Profile with ±1σ uncertainty band
     ax_alt = plt.subplot(3, 1, 1)
-    ax_alt.plot(times, truth_alt, "b-", linewidth=2.5, label="Truth", zorder=3)
-    ax_alt.plot(times, est_alt, "r--", linewidth=2, label="Estimate", zorder=2)
+    ax_alt.plot(times, truth_alt, "b-", linewidth=2.5, label="Truth", alpha=0.4, zorder=2)
+    ax_alt.plot(times, est_alt, "r--", linewidth=2, label="Estimate", zorder=3)
     
     # ±1σ uncertainty band
     ax_alt.fill_between(
@@ -273,12 +324,12 @@ def plot_final_results(data_path: Path = DATA_FILE, zoom_extent: list[float] | N
     ax_alt.set_xlabel("Time [s]", fontsize=12)
     ax_alt.set_ylabel("Altitude [km]", fontsize=12)
     ax_alt.legend(loc="best", fontsize=11)
-    ax_alt.grid(True, alpha=0.3)
+    ax_alt.grid(True, alpha=0.5, linestyle='--', linewidth=0.7)
     
     # 2. Velocity Magnitude Profile with ±1σ uncertainty band
     ax_vel = plt.subplot(3, 1, 2)
-    ax_vel.plot(times, truth_vel_mag, "b-", linewidth=2.5, label="Truth", zorder=3)
-    ax_vel.plot(times, est_vel_mag, "r--", linewidth=2, label="Estimate", zorder=2)
+    ax_vel.plot(times, truth_vel_mag, "b-", linewidth=2.5, label="Truth", alpha=0.4, zorder=2)
+    ax_vel.plot(times, est_vel_mag, "r--", linewidth=2, label="Estimate", zorder=3)
     
     # ±1σ uncertainty band
     ax_vel.fill_between(
@@ -295,7 +346,7 @@ def plot_final_results(data_path: Path = DATA_FILE, zoom_extent: list[float] | N
     ax_vel.set_xlabel("Time [s]", fontsize=12)
     ax_vel.set_ylabel("Velocity [km/s]", fontsize=12)
     ax_vel.legend(loc="best", fontsize=11)
-    ax_vel.grid(True, alpha=0.3)
+    ax_vel.grid(True, alpha=0.5, linestyle='--', linewidth=0.7)
     
     # 3. Ground Track
     ax_ground = plt.subplot(3, 1, 3, projection=ccrs.PlateCarree())
@@ -370,15 +421,17 @@ def plot_final_results(data_path: Path = DATA_FILE, zoom_extent: list[float] | N
         )
     
     ax_ground.set_title("Ballistic Trajectory Ground Track", fontsize=14, weight="bold")
-    ax_ground.legend(loc="upper left", fontsize=11)
+    ax_ground.legend(loc="best", fontsize=11)
 
     plt.tight_layout()
 
-    # Save figure
+    # Save figure (PNG and PDF)
     output_dir = data_path.parent
-    output_path = output_dir / "tracking_results.png"
-    plt.savefig(output_path, dpi=150, bbox_inches="tight")
-    print(f"Saved tracking results to {output_path}")
+    output_path_png = output_dir / "tracking_results.png"
+    output_path_pdf = output_dir / "tracking_results.pdf"
+    plt.savefig(output_path_png, dpi=150, bbox_inches="tight")
+    plt.savefig(output_path_pdf, bbox_inches="tight")
+    print(f"Saved tracking results to {output_path_png} and {output_path_pdf}")
 
     plt.show(block=False)
 
@@ -522,11 +575,162 @@ def plot_error_analysis(data_path: Path = DATA_FILE) -> None:
     
     plt.tight_layout()
     
-    # Save figure
+    # Save figure (PNG and PDF)
     output_dir = data_path.parent
-    output_path = output_dir / "error_analysis.png"
-    plt.savefig(output_path, dpi=150, bbox_inches="tight")
-    print(f"Saved error analysis to {output_path}")
+    output_path_png = output_dir / "error_analysis.png"
+    output_path_pdf = output_dir / "error_analysis.pdf"
+    plt.savefig(output_path_png, dpi=150, bbox_inches="tight")
+    plt.savefig(output_path_pdf, bbox_inches="tight")
+    print(f"Saved error analysis to {output_path_png} and {output_path_pdf}")
+    
+    plt.show(block=False)
+
+
+def plot_measurement_errors(data_path: Path = DATA_FILE) -> None:
+    """Create 3x1 subplot showing measurement errors: LOS error, azimuth error, elevation error.
+    
+    Args:
+        data_path: Path to simulation data
+    """
+    if not data_path.exists():
+        raise FileNotFoundError(
+            f"No simulation results found at {data_path}. Run main.py first."
+        )
+
+    data = np.load(data_path)
+    times = data["times"]
+    truth = data["truth"]
+    
+    # Load measurements
+    meas_times = data.get("meas_times", np.array([]))
+    meas_sat_positions = data.get("meas_sat_positions", np.array([]))
+    meas_alphas = data.get("meas_alphas", np.array([]))
+    meas_betas = data.get("meas_betas", np.array([]))
+    
+    if len(meas_times) == 0:
+        print("No measurements available for error analysis")
+        return
+    
+    # Compute expected measurements from truth
+    # For each measurement, find the corresponding truth position
+    los_errors = []
+    az_errors = []
+    el_errors = []
+    meas_times_list = []
+    
+    for i, (meas_time, sat_pos, meas_alpha, meas_beta) in enumerate(
+        zip(meas_times, meas_sat_positions, meas_alphas, meas_betas)
+    ):
+        # Find closest truth time
+        time_idx = np.argmin(np.abs(times - meas_time))
+        true_pos = truth[time_idx, :3]
+        
+        # Compute expected measurement (true az/el from true position)
+        rel = true_pos - sat_pos
+        rel_norm = np.linalg.norm(rel)
+        
+        # Expected azimuth and elevation
+        true_alpha = np.arctan2(rel[1], rel[0])
+        true_beta = np.arcsin(rel[2] / rel_norm) if rel_norm > 0 else 0
+        
+        # Compute errors
+        # Azimuth error (wrap to [-pi, pi])
+        az_error = meas_alpha - true_alpha
+        az_error = np.arctan2(np.sin(az_error), np.cos(az_error))  # Wrap to [-pi, pi]
+        
+        # Elevation error
+        el_error = meas_beta - true_beta
+        
+        # LOS error (absolute angular error)
+        # Compute angle between measured and true LOS vectors
+        # Measured LOS direction
+        meas_los = np.array([
+            np.cos(meas_alpha) * np.cos(meas_beta),
+            np.sin(meas_alpha) * np.cos(meas_beta),
+            np.sin(meas_beta)
+        ])
+        # True LOS direction
+        true_los = rel / rel_norm
+        
+        # Angular separation (absolute LOS error)
+        cos_angle = np.clip(np.dot(meas_los, true_los), -1.0, 1.0)
+        los_error = np.arccos(cos_angle)
+        
+        los_errors.append(los_error)
+        az_errors.append(az_error)
+        el_errors.append(el_error)
+        meas_times_list.append(meas_time)
+    
+    los_errors = np.array(los_errors)
+    az_errors = np.array(az_errors)
+    el_errors = np.array(el_errors)
+    meas_times_min = np.array(meas_times_list) / 60.0  # Convert to minutes
+    
+    # Create 3x1 subplot figure
+    fig, axes = plt.subplots(3, 1, figsize=(14, 12))
+    fig.suptitle("Measurement Errors vs Expected (True) Measurements", fontsize=16, weight="bold")
+    
+    # 1. LOS Error (absolute angular error)
+    ax_los = axes[0]
+    ax_los.plot(meas_times_min, los_errors * 1e6, "ko", markersize=3, alpha=0.6)  # Convert to microradians
+    ax_los.axhline(0, color="gray", linestyle=":", linewidth=1, alpha=0.5)
+    ax_los.set_title("Line-of-Sight (LOS) Angular Error", fontsize=13, weight="bold")
+    ax_los.set_xlabel("Time [min]", fontsize=11)
+    ax_los.set_ylabel("LOS Error [µrad]", fontsize=11)
+    ax_los.grid(True, alpha=0.3)
+    ax_los.set_ylim(bottom=0)
+    
+    # Add statistics
+    los_mean = np.mean(los_errors) * 1e6
+    los_std = np.std(los_errors) * 1e6
+    ax_los.text(0.98, 0.98, f"Mean: {los_mean:.1f} µrad\nStd: {los_std:.1f} µrad",
+                transform=ax_los.transAxes, verticalalignment='top', horizontalalignment='right',
+                bbox=dict(boxstyle='round', facecolor='wheat', alpha=0.5),
+                fontsize=10)
+    
+    # 2. Azimuth Error (signed)
+    ax_az = axes[1]
+    ax_az.plot(meas_times_min, az_errors * 1e6, "bo", markersize=3, alpha=0.6)  # Convert to microradians
+    ax_az.axhline(0, color="gray", linestyle=":", linewidth=1, alpha=0.5)
+    ax_az.set_title("Azimuth Error (Measured - True)", fontsize=13, weight="bold")
+    ax_az.set_xlabel("Time [min]", fontsize=11)
+    ax_az.set_ylabel("Azimuth Error [µrad]", fontsize=11)
+    ax_az.grid(True, alpha=0.3)
+    
+    # Add statistics
+    az_mean = np.mean(az_errors) * 1e6
+    az_std = np.std(az_errors) * 1e6
+    ax_az.text(0.98, 0.98, f"Mean: {az_mean:.1f} µrad\nStd: {az_std:.1f} µrad",
+               transform=ax_az.transAxes, verticalalignment='top', horizontalalignment='right',
+               bbox=dict(boxstyle='round', facecolor='lightblue', alpha=0.5),
+               fontsize=10)
+    
+    # 3. Elevation Error (signed)
+    ax_el = axes[2]
+    ax_el.plot(meas_times_min, el_errors * 1e6, "ro", markersize=3, alpha=0.6)  # Convert to microradians
+    ax_el.axhline(0, color="gray", linestyle=":", linewidth=1, alpha=0.5)
+    ax_el.set_title("Elevation Error (Measured - True)", fontsize=13, weight="bold")
+    ax_el.set_xlabel("Time [min]", fontsize=11)
+    ax_el.set_ylabel("Elevation Error [µrad]", fontsize=11)
+    ax_el.grid(True, alpha=0.3)
+    
+    # Add statistics
+    el_mean = np.mean(el_errors) * 1e6
+    el_std = np.std(el_errors) * 1e6
+    ax_el.text(0.98, 0.98, f"Mean: {el_mean:.1f} µrad\nStd: {el_std:.1f} µrad",
+               transform=ax_el.transAxes, verticalalignment='top', horizontalalignment='right',
+               bbox=dict(boxstyle='round', facecolor='lightcoral', alpha=0.5),
+               fontsize=10)
+    
+    plt.tight_layout()
+    
+    # Save figure (PNG and PDF)
+    output_dir = data_path.parent
+    output_path_png = output_dir / "measurement_errors.png"
+    output_path_pdf = output_dir / "measurement_errors.pdf"
+    plt.savefig(output_path_png, dpi=150, bbox_inches="tight")
+    plt.savefig(output_path_pdf, bbox_inches="tight")
+    print(f"Saved measurement error analysis to {output_path_png} and {output_path_pdf}")
     
     plt.show(block=False)
 
@@ -535,4 +739,5 @@ if __name__ == "__main__":
     from main import ZOOM
     plot_final_results(zoom_extent=ZOOM)
     plot_error_analysis()
+    plot_measurement_errors()
     plt.show()  # Keep all plots open

@@ -49,12 +49,12 @@ def measurement_jacobian(
 
 
 @dataclass
-class TrackerState:
+class EKFState:
     state: NDArray[np.float64]
     covariance: NDArray[np.float64]
 
 
-class Tracker:
+class EKF:
     """Constant-velocity EKF that fuses simultaneous measurements."""
 
     def __init__(
@@ -71,12 +71,12 @@ class Tracker:
             self.covariance = initial_covariance.copy()
         self.process_sigma = process_sigma
 
-    def step(self, dt: float, measurements: list[Measurement]) -> TrackerState:
+    def step(self, dt: float, measurements: list[Measurement]) -> EKFState:
         if dt > 0.0:
             self._predict(dt)
         if measurements:
             self._update(measurements)
-        return TrackerState(self.state.copy(), self.covariance.copy())
+        return EKFState(self.state.copy(), self.covariance.copy())
 
     def _predict(self, dt: float) -> None:
         F = np.eye(6)

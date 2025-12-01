@@ -89,7 +89,7 @@ class BallisticTarget:
         alt_km = self.alt_a * t_norm**2 + self.alt_b * t_norm + self.alt_c
         
         # return ECEF
-        pos_ecef_km = lla_to_ecef(np.radians(lat_deg), np.radians(lon_deg), alt_km)
+        pos_ecef_km = lla_to_ecef(lat_deg, lon_deg, alt_km)
         
         # Compute velocity via finite difference b/w two points and tiny dt
         dt = 0.1 # small dt
@@ -101,7 +101,7 @@ class BallisticTarget:
             lon_next = self.lon0 + (self.lon1 - self.lon0) * t_norm_next
             alt_next = self.alt_a * t_norm_next**2 + self.alt_b * t_norm_next + self.alt_c
             
-            pos_next_km = lla_to_ecef(np.radians(lat_next), np.radians(lon_next), alt_next)
+            pos_next_km = lla_to_ecef(lat_next, lon_next, alt_next)
             vel_ecef_km_s = (pos_next_km - pos_ecef_km) / dt
         elif time_s > dt:
             t_prev = time_s - dt
@@ -111,7 +111,7 @@ class BallisticTarget:
             lon_prev = self.lon0 + (self.lon1 - self.lon0) * t_norm_prev
             alt_prev = self.alt_a * t_norm_prev**2 + self.alt_b * t_norm_prev + self.alt_c
             
-            pos_prev_km = lla_to_ecef(np.radians(lat_prev), np.radians(lon_prev), alt_prev)
+            pos_prev_km = lla_to_ecef(lat_prev, lon_prev, alt_prev)
             
             vel_ecef_km_s = (pos_ecef_km - pos_prev_km) / dt
         else:
