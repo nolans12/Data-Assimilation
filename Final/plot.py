@@ -9,7 +9,8 @@ from scipy.stats import chi2
 from common import ecef_to_lla
 
 EARTH_RADIUS_KM = 6378.0
-DATA_FILE = Path(__file__).resolve().parent / "data" / "simulation_run.npz"
+# DEFAULT_DATA_FILE = Path(__file__).resolve().parent / "data_w_bias" / "simulation_run.npz"
+DEFAULT_DATA_FILE = Path(__file__).resolve().parent / "data" / "simulation_run.npz"
 
 
 class LivePlotter:
@@ -239,13 +240,21 @@ class LivePlotter:
         plt.show()
 
 
-def plot_final_results(data_path: Path = DATA_FILE, zoom_extent: list[float] | None = None) -> None:
+def plot_final_results(data_path: Path | str | None = None, zoom_extent: list[float] | None = None) -> None:
     """Create 3x1 subplot: altitude profile, velocity magnitude profile, and ground track.
     
     Args:
-        data_path: Path to simulation data
+        data_path: Path to simulation data (file or directory). If None, uses default.
+                   If directory, looks for simulation_run.npz inside it.
         zoom_extent: [min_lat, min_lon, max_lat, max_lon] for ground track zoom
     """
+    if data_path is None:
+        data_path = DEFAULT_DATA_FILE
+    else:
+        data_path = Path(data_path)
+        if data_path.is_dir():
+            data_path = data_path / "simulation_run.npz"
+    
     if not data_path.exists():
         raise FileNotFoundError(
             f"No simulation results found at {data_path}. Run main.py first."
@@ -436,12 +445,20 @@ def plot_final_results(data_path: Path = DATA_FILE, zoom_extent: list[float] | N
     plt.show(block=False)
 
 
-def plot_error_analysis(data_path: Path = DATA_FILE) -> None:
+def plot_error_analysis(data_path: Path | str | None = None) -> None:
     """Create 3x3 subplot showing component-wise errors with ±1σ bounds and NEES.
     
     Args:
-        data_path: Path to simulation data
+        data_path: Path to simulation data (file or directory). If None, uses default.
+                   If directory, looks for simulation_run.npz inside it.
     """
+    if data_path is None:
+        data_path = DEFAULT_DATA_FILE
+    else:
+        data_path = Path(data_path)
+        if data_path.is_dir():
+            data_path = data_path / "simulation_run.npz"
+    
     if not data_path.exists():
         raise FileNotFoundError(
             f"No simulation results found at {data_path}. Run main.py first."
@@ -479,9 +496,12 @@ def plot_error_analysis(data_path: Path = DATA_FILE) -> None:
     # Compute consistency percentage
     nees_consistent = np.sum((nees >= nees_lower) & (nees <= nees_upper)) / len(nees) * 100
     
-    # Create 3x3 subplot figure
-    fig = plt.figure(figsize=(18, 12))
-    gs = fig.add_gridspec(3, 3, hspace=0.35, wspace=0.35)
+    # Compute RMSE (Root Mean Square Error) over time
+    pos_rmse = np.sqrt(np.sum(pos_errors**2, axis=1))  # Position RMSE in meters
+    
+    # Create 4x3 subplot figure
+    fig = plt.figure(figsize=(18, 14))
+    gs = fig.add_gridspec(4, 3, hspace=0.35, wspace=0.35)
     fig.suptitle("Component-Wise Estimation Errors with ±1σ Bounds", fontsize=16, weight="bold")
     
     # Position error plots (top row)
@@ -556,8 +576,23 @@ def plot_error_analysis(data_path: Path = DATA_FILE) -> None:
         if i == 0:
             ax.legend(loc="best", fontsize=9)
     
-    # NEES plot (bottom row, spanning all 3 columns)
-    ax_nees = fig.add_subplot(gs[2, :])
+    # Compute average RMSE
+    avg_rmse = np.mean(pos_rmse)
+    
+    # RMSE plot (third row, spanning all 3 columns)
+    ax_rmse = fig.add_subplot(gs[2, :])
+    ax_rmse.plot(times, pos_rmse, "b-", linewidth=2, label="Position RMSE", zorder=3)
+    
+    ax_rmse.set_title(f"Position Root Mean Square Error - Average: {avg_rmse:.3f} m", 
+                      fontsize=12, weight="bold")
+    ax_rmse.set_xlabel("Time [s]", fontsize=11)
+    ax_rmse.set_ylabel("Position RMSE [m]", fontsize=11)
+    ax_rmse.grid(True, alpha=0.3)
+    ax_rmse.set_ylim(bottom=0)
+    ax_rmse.legend(loc="best", fontsize=9)
+    
+    # NEES plot (fourth/bottom row, spanning all 3 columns)
+    ax_nees = fig.add_subplot(gs[3, :])
     ax_nees.plot(times, nees, "b-", linewidth=2, label="NEES", zorder=3)
     ax_nees.axhline(nees_lower, color="r", linestyle="--", linewidth=2, label=f"95% bounds (χ²({dof_nees}))", zorder=2)
     ax_nees.axhline(nees_upper, color="r", linestyle="--", linewidth=2, zorder=2)
@@ -586,12 +621,20 @@ def plot_error_analysis(data_path: Path = DATA_FILE) -> None:
     plt.show(block=False)
 
 
-def plot_measurement_errors(data_path: Path = DATA_FILE) -> None:
+def plot_measurement_errors(data_path: Path | str | None = None) -> None:
     """Create 3x1 subplot showing measurement errors: LOS error, azimuth error, elevation error.
     
     Args:
-        data_path: Path to simulation data
+        data_path: Path to simulation data (file or directory). If None, uses default.
+                   If directory, looks for simulation_run.npz inside it.
     """
+    if data_path is None:
+        data_path = DEFAULT_DATA_FILE
+    else:
+        data_path = Path(data_path)
+        if data_path.is_dir():
+            data_path = data_path / "simulation_run.npz"
+    
     if not data_path.exists():
         raise FileNotFoundError(
             f"No simulation results found at {data_path}. Run main.py first."
@@ -736,8 +779,46 @@ def plot_measurement_errors(data_path: Path = DATA_FILE) -> None:
 
 
 if __name__ == "__main__":
-    from main import ZOOM
-    plot_final_results(zoom_extent=ZOOM)
-    plot_error_analysis()
-    plot_measurement_errors()
+    import argparse
+    
+    parser = argparse.ArgumentParser(
+        description="Plot simulation results from saved data",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog="""
+Examples:
+  python plot.py                    # Use default data directory (./data/)
+  python plot.py --data data/       # Specify data directory
+  python plot.py --data data/simulation_run.npz  # Specify exact file
+  python plot.py --data ../other_run/data/  # Use different directory
+        """
+    )
+    parser.add_argument(
+        "--data", 
+        type=str, 
+        default=None,
+        help="Path to data directory or .npz file (default: ./data/simulation_run.npz)"
+    )
+    
+    args = parser.parse_args()
+    
+    # Determine data path
+    if args.data:
+        data_path = Path(args.data)
+        print(f"Loading data from: {data_path}")
+    else:
+        data_path = None
+        print(f"Loading data from default location: {DEFAULT_DATA_FILE}")
+    
+    # Try to import ZOOM from main.py, fall back to None if not available
+    try:
+        from main import ZOOM
+        zoom_extent = ZOOM
+    except ImportError:
+        zoom_extent = None
+        print("Could not import ZOOM from main.py, using global view")
+    
+    # Generate all plots
+    plot_final_results(data_path=data_path, zoom_extent=zoom_extent)
+    plot_error_analysis(data_path=data_path)
+    plot_measurement_errors(data_path=data_path)
     plt.show()  # Keep all plots open

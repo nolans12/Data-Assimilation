@@ -8,6 +8,7 @@ from sensing import create_geo_satellites
 from target import BallisticTarget
 from bias_field import bias_model, TRUE_THETA
 from ekf_tracker import EKF
+from bias_estimator import BiasFieldEstimatorLive
 from plot import LivePlotter
 from common import ecef_to_lla
 
@@ -18,7 +19,12 @@ rng = np.random.default_rng(SEED)
 # Whether to adjust measurements by bias field or not
 USE_BIAS = True
 # Whether to estimate bias field parameters and correct measurements by them or not
-ESTIMATE_BIAS = False
+ESTIMATE_BIAS = True
+# Number of SIRE sites for bias esimtation
+NUM_SIRES = 25
+# Noise of estimating bias locations
+BIAS_NOISE_SIGMA = 10e-6 # actual, same R as meas noise
+BIAS_NOISE_SIGMA = np.deg2rad(0.1) # for visual, easy to see
 
 # Meas Noise (sigma)
 NOISE_SIGMA = 10e-6 # radians
@@ -68,8 +74,19 @@ def run_simulation(seed: int = 0, live_plot: bool = True) -> Path:
         jittered_positions.append([jitter_lat, jitter_lon])
     satellites = create_geo_satellites(
         positions=jittered_positions,
-        noise_sigma=NOISE_SIGMA,
+        noise_sigma=NOISE_SIGMA,    
     )
+
+    #### CREATE BIAS ESTIMATOR ####    
+    if ESTIMATE_BIAS:
+        bias_estimator = BiasFieldEstimatorLive(
+            NUM_SIRES=NUM_SIRES,
+            NOISE_SIGMA=BIAS_NOISE_SIGMA,
+            SEED=SEED,
+            SAVE_FRAMES=True,
+        )
+    else:
+        bias_estimator = None
 
     #### CREATE EKF ####
     state0, vel0 = target.state_at(0.0)
@@ -97,6 +114,13 @@ def run_simulation(seed: int = 0, live_plot: bool = True) -> Path:
         dt = t - prev_time
         measurements = [sat.measure(t, pos, rng=rng, USE_BIAS=USE_BIAS) for sat in satellites]
         all_measurements.extend(measurements)  
+        
+         # Bias Field Estimation
+        if ESTIMATE_BIAS:
+            bias_estimator.step(sim_time=t)
+            # Adjust measurements based on bias_estimator!
+            for meas in measurements:
+                meas.sub_out_est_bias(theta_est=bias_estimator.theta, est_pos=pos)
 
         # Run EKF on measuremetns at time step
         ekf_state = ekf.step(dt, measurements)
@@ -104,7 +128,7 @@ def run_simulation(seed: int = 0, live_plot: bool = True) -> Path:
         cov_diagonals.append(np.diag(ekf_state.covariance))
 
         # Update live plot every 5 steps
-        if plotter and idx % 5 == 0:
+        if plotter:
             sat_positions = [sat.position for sat in satellites]
             
             # Convert measurements to LLA using az/el + distance from satellite to true target position (only use true pos for vis)
@@ -144,6 +168,10 @@ def run_simulation(seed: int = 0, live_plot: bool = True) -> Path:
     if plotter:
         print("\nSimulation complete.")
         plotter.close()
+        
+    if ESTIMATE_BIAS:
+        bias_estimator.close()
+
 
     #### SAVE RESULTS ####
     truth_arr = np.stack(truth)
