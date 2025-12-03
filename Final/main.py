@@ -23,7 +23,6 @@ ESTIMATE_BIAS = True
 # Number of SIRE sites for bias esimtation
 NUM_SIRES = 25
 # Noise of estimating bias locations
-BIAS_NOISE_SIGMA = 10e-6 # actual, same R as meas noise
 BIAS_NOISE_SIGMA = np.deg2rad(0.1) # for visual, easy to see
 
 # Meas Noise (sigma)

@@ -36,6 +36,41 @@ lon = np.linspace(-180,180,361)
 Lon, Lat = np.meshgrid(lon, lat)
 bA, bE = bias_model(Lat, Lon)
 
+
+def fibonacci_sites(n, seed=0):
+    """Generate n uniformly distributed points on a sphere using Fibonacci lattice."""
+    rng = np.random.default_rng(seed)
+    idx = np.arange(n)
+    phi = np.arccos(1 - 2*(idx + 0.5)/n) - np.pi/2
+    lam = (2*np.pi/(np.sqrt(5)+1)) * idx + rng.uniform(-0.1,0.1,size=n)
+    return np.rad2deg(phi), ((np.rad2deg(lam)+180)%360 - 180)
+
+
+def plot_sire_locations(n_sires=25, seed=0):
+    """Plot SIRE site locations on a global map."""
+    sire_lat, sire_lon = fibonacci_sites(n_sires, seed=seed)
+    
+    fig = plt.figure(figsize=(11, 5))
+    ax = plt.axes(projection=ccrs.Robinson(central_longitude=0))
+    ax.set_global()
+    ax.coastlines()
+    ax.add_feature(cfeature.BORDERS, linewidth=0.4)
+    ax.add_feature(cfeature.LAND, facecolor="#f4f2ec")
+    ax.add_feature(cfeature.OCEAN, facecolor="#c6dbef")
+    ax.gridlines(draw_labels=False, linewidth=0.5, color='gray', alpha=0.5, linestyle='--')
+    
+    # Plot SIRE locations
+    ax.scatter(
+        sire_lon, sire_lat,
+        s=80, c='red', marker='^', edgecolors='black', linewidths=0.5,
+        transform=ccrs.PlateCarree(), zorder=5, label=f"SIRE Sites (n={n_sires})"
+    )
+    
+    ax.set_title(f"SIRE Ground Station Locations", fontsize=13, weight="bold")
+    ax.legend(loc="lower left", fontsize=10)
+    plt.show()
+
+
 def plot_field(theta=TRUE_THETA, title="True Bias Field (deg)", cmap="coolwarm"):
     bA, bE = bias_model(Lat, Lon, theta)
 
@@ -71,3 +106,4 @@ def plot_field(theta=TRUE_THETA, title="True Bias Field (deg)", cmap="coolwarm")
     plt.show()
 
 # plot_field()
+# plot_sire_locations()
