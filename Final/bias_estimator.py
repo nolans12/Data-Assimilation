@@ -14,48 +14,123 @@ from pathlib import Path
 
 from bias_field import bias_model, TRUE_THETA
 
-
-# ============================================================
-# Basis Functions (H blocks)
-# ============================================================
-
-def h_alpha(lat, lon):
+def h_lat(lat, lon, theta):
     phi, lam = np.deg2rad(lat), np.deg2rad(lon)
+    x0,x1,x2,x3,x4,x5, *_ = theta
     return np.stack([
-        np.ones_like(phi),
-        np.sin(phi),
-        np.cos(phi)*np.cos(lam),
-        np.cos(phi)*np.sin(lam),
-        np.sin(2*phi)*np.cos(2*lam),
-        np.sin(2*phi)*np.sin(2*lam),
+        x0*np.ones_like(phi),
+        x1**3*np.sin(phi),
+        x2**4*np.cos(phi)*np.cos(lam),
+        x3**2*np.cos(phi)*np.sin(lam),
+        x4**5*np.sin(2*phi)*np.cos(2*lam),
+        x5*np.sin(2*phi)*np.sin(2*lam)
     ], axis=-1)
 
-def h_elev(lat, lon):
+def h_lon(lat, lon, theta):
     phi, lam = np.deg2rad(lat), np.deg2rad(lon)
+    *_,x6,x7,x8,x9,x10,x11 = theta
+    return np.stack([
+        x6*np.ones_like(phi),
+        x7**3*np.sin(phi),
+        x8**3*np.cos(phi)*np.cos(lam),
+        x9**2*np.cos(phi)*np.sin(lam),
+        x10**5*np.sin(2*phi)*np.cos(2*lam),
+        -x11*np.sin(0.5*phi)*np.sin(lam)
+    ], axis=-1)
+
+def jacobian_lat(lat_deg, lon_deg, theta):
+    """Jacobian row block for h_phi wrt 12 parameters."""
+    phi, lam = np.deg2rad(lat_deg), np.deg2rad(lon_deg)
+    x0,x1,x2,x3,x4,x5, *_ = theta
+
     return np.stack([
         np.ones_like(phi),
-        0.5*(3*np.sin(phi)**2 - 1),
-        np.cos(phi)*np.cos(lam),
-        -np.cos(phi)*np.sin(lam),
-        np.sin(2*phi),
+        3*x1**2 * np.sin(phi),
+        4*x2**3 * np.cos(phi)*np.cos(lam),
+        2*x3     * np.cos(phi)*np.sin(lam),
+        5*x4**4 * np.sin(2*phi)*np.cos(2*lam),
+        np.sin(2*phi)*np.sin(2*lam)
     ], axis=-1)
 
 
+def jacobian_lon(lat_deg, lon_deg, theta):
+    """Jacobian row block for h_lambda wrt 12 parameters."""
+    phi, lam = np.deg2rad(lat_deg), np.deg2rad(lon_deg)
+    *_, x6,x7,x8,x9,x10,x11 = theta
+
+    return np.stack([
+        np.ones_like(phi),
+        3*x7**2 * np.sin(phi),
+        3*x8**2 * np.cos(phi)*np.cos(lam),
+        2*x9     * np.cos(phi)*np.sin(lam),
+        5*x10**4 * np.sin(2*phi)*np.cos(2*lam),
+        -np.sin(0.5*phi)*np.sin(lam)
+    ], axis=-1)
+
+
+
 # ============================================================
-# 3D-Var Update
+# 3D-Var Update with Newtons Method
 # ============================================================
 
-def three_d_var_update(theta_b, B, H, y, R):
-    HBHT = H @ B @ H.T
-    S = HBHT + R
-    K = B @ H.T @ np.linalg.inv(S)
-    innov = y - H @ theta_b
-    theta_a = theta_b + K @ innov
+def three_d_var_newtons_update(theta_b, B, y, R,
+                               sire_lat, sire_lon):
+    """
+    Newton (Gauss–Newton) 3D-Var update for nonlinear bias model.
+    Only theta is updated; B is unchanged.
+    
+    Required call structure:
+        theta_new = three_d_var_newtons_update(theta, B, H, y, R)
 
-    I = np.eye(B.shape[0])
-    B_a = (I - K @ H) @ B @ (I - K @ H).T + K @ R @ K.T
-    return theta_a, B_a
+    This function *automatically* recomputes:
+        - nonlinear predicted h(theta)
+        - block Jacobian H(theta)
 
+    NOTE: Because H depends on theta and SIRE locations, we detect
+          the lat/lon arrays from the closure variables if needed.
+    """
+
+    phi = sire_lat
+    lam = sire_lon
+    N = len(phi)
+
+    # ------------------------------------------------------------
+    # Evaluate nonlinear h(theta)
+    # ------------------------------------------------------------
+    h_lat_vals = h_lat(phi, lam, theta_b)    # N×6
+    h_lon_vals = h_lon(phi, lam, theta_b)    # N×6
+
+    h_pred = np.concatenate([
+        np.sum(h_lat_vals, axis=1),
+        np.sum(h_lon_vals, axis=1)
+    ])  # shape (2N,)
+
+    innov = h_pred - y   # matches ∇J form
+
+    # ------------------------------------------------------------
+    # Build block-Jacobian
+    # ------------------------------------------------------------
+    J_lat = jacobian_lat(phi, lam, theta_b)  # N×6
+    J_lon = jacobian_lon(phi, lam, theta_b)  # N×6
+
+    H_jac = np.block([
+        [J_lat,              np.zeros((N,6))],
+        [np.zeros((N,6)),    J_lon]
+    ])  # (2N × 12)
+
+    # ------------------------------------------------------------
+    # Newton / Gauss–Newton update
+    # ------------------------------------------------------------
+    B_inv = np.linalg.inv(B)
+    R_inv = np.linalg.inv(R)
+
+    grad = H_jac.T @ R_inv @ innov + B_inv @ (theta_b - theta_b)  # background fixed → term = 0
+    Hess = H_jac.T @ R_inv @ H_jac + B_inv
+
+    delta = np.linalg.solve(Hess, grad)
+    theta_new = theta_b - delta
+
+    return theta_new
 
 # ============================================================
 # Uniform SIRE site distribution
@@ -67,6 +142,143 @@ def fibonacci_sites(n, seed=0):
     phi = np.arccos(1 - 2*(idx + 0.5)/n) - np.pi/2
     lam = (2*np.pi/(np.sqrt(5)+1)) * idx + rng.uniform(-0.1,0.1,size=n)
     return np.rad2deg(phi), ((np.rad2deg(lam)+180)%360 - 180)
+
+
+
+# ============================================================
+#                MAIN ESTIMATOR CLASS
+# ============================================================
+
+class BiasFieldEstimatorLive:
+    """
+    Create once, then integrate into main.py with:
+
+        bias_estimator = BiasFieldEstimatorLive(NUM_SIRES, NOISE_SIGMA, SEED)
+
+        # in main loop each dt:
+        if ESTIMATE_BIAS:
+            bias_estimator.step(t)
+
+    """
+
+    def __init__(
+        self,
+        NUM_SIRES: int,
+        NOISE_SIGMA: float,
+        SEED: int = 0,
+        SAVE_FRAMES: bool = True,
+    ):
+
+        self.N = NUM_SIRES
+        self.sigma = NOISE_SIGMA
+        self.seed = SEED
+        self.rng = np.random.default_rng(SEED)
+
+        # SIRE locations (true)
+        self.sire_lat, self.sire_lon = fibonacci_sites(NUM_SIRES, seed=SEED)
+
+        # R to sample from
+        self.R = np.diag(np.full(2*self.N, self.sigma**2))
+
+        # Initial estimate and cov
+        self.theta = np.zeros(12)
+        self.B = np.diag(np.full(12, np.deg2rad(0.4)**2))
+
+        # History for parameter tracking
+        self.theta_history: list[np.ndarray] = []
+        self.time_history: list[float] = []
+
+        # live plotter script
+        self.plotter = BiasFieldLivePlotterBoth(save_frames=SAVE_FRAMES)
+
+        # step counter
+        self.step_index = 0
+
+
+    # -----------------------------------------------------------
+    # PUBLIC METHOD CALLED FROM main.py EACH TIME STEP
+    # -----------------------------------------------------------
+    def step(self, sim_time: float):
+        """
+        Perform one 3D-Var update using noisy samples of TRUE bias field
+        at the SIRE locations.
+        """
+
+        # TRUE field at SIREs
+        B_Lat_true, B_Lon_true = bias_model(self.sire_lat, self.sire_lon)
+
+        # add noise to the true bias measurements - this is meas vector
+        y_Lat = np.deg2rad(B_Lat_true) + self.rng.normal(0, self.sigma, size=self.N)
+        y_Lon  = np.deg2rad(B_Lon_true) + self.rng.normal(0, self.sigma, size=self.N)
+        y = np.concatenate([y_Lat, y_Lon])
+
+        # 3D-Var update
+        self.theta = three_d_var_newtons_update(
+            self.theta,
+            self.B,
+            y,
+            self.R,
+            self.sire_lat,
+            self.sire_lon
+        )
+
+        # Store history for analysis/plots
+        self.theta_history.append(self.theta.copy())
+        self.time_history.append(sim_time)
+
+
+        # live plot update
+        self.plotter.update(
+            step=sim_time,
+            theta_est=self.theta,
+            sire_lat=self.sire_lat,
+            sire_lon=self.sire_lon,
+            meas_lat_rad=y_Lat,
+            meas_lon_rad=y_Lon,
+        )
+
+        self.step_index += 1
+
+
+    def close(self):
+        self.plotter.close()
+
+        # -------------------------------------------------------
+        # Plot tracking of each theta parameter vs time
+        # -------------------------------------------------------
+        if not self.theta_history:
+            return
+
+        times = np.array(self.time_history)
+        theta_hist = np.vstack(self.theta_history)  # (T, 12)
+        theta_true = np.asarray(TRUE_THETA)         # (12,)
+
+        # Convert time to minutes for plotting
+        time_min = times / 60.0
+
+        fig, axes = plt.subplots(3, 4, figsize=(18, 10), sharex=True)
+        axes = axes.ravel()
+
+        for i in range(12):
+            ax = axes[i]
+            ax.plot(time_min, theta_hist[:, i], label="Estimate", color="tab:blue")
+            ax.axhline(theta_true[i], color="k", linestyle="--", label="Truth")
+            ax.set_title(f"$\\theta_{i}$", fontsize=10)
+            ax.grid(True, alpha=0.3)
+            if i % 4 == 0:
+                ax.set_ylabel("Value [rad]")
+
+        for ax in axes[-4:]:
+            ax.set_xlabel("Time [min]")
+
+        # Single legend and title
+        handles, labels = axes[0].get_legend_handles_labels()
+        fig.legend(handles, labels, loc="upper center", ncol=2)
+        fig.suptitle("Bias Parameter Tracking vs Truth", fontsize=14, weight="bold")
+        fig.tight_layout(rect=[0, 0, 1, 0.92])
+
+        plt.show()
+
 
 
 # ============================================================
@@ -123,7 +335,37 @@ class BiasFieldLivePlotterBoth:
                                transform=ccrs.PlateCarree(), alpha=0.7)
         self.axE_true.set_title("Elevation Bias Field (TRUTH)", fontsize=13, weight="bold")
 
-    def update(self, step, theta_est, sire_lat, sire_lon, measA_rad, measE_rad):
+        # ------------------------------------------------------
+        # Live parameter tracking figure (12 parameters)
+        # ------------------------------------------------------
+        self.fig_theta, theta_axes = plt.subplots(3, 4, figsize=(18, 8), sharex=True)
+        self.theta_axes = theta_axes.ravel()
+        self.theta_lines = []
+        self.theta_time_hist: list[float] = []
+        self.theta_hist: list[np.ndarray] = []
+
+        for i, ax in enumerate(self.theta_axes):
+            # Line for estimate
+            (line_est,) = ax.plot([], [], color="tab:blue", label="Estimate")
+            # Truth as horizontal line
+            ax.axhline(TRUE_THETA[i], color="k", linestyle="--", label="Truth")
+
+            ax.set_title(f"$\\theta_{i}$", fontsize=10)
+            ax.grid(True, alpha=0.3)
+            if i % 4 == 0:
+                ax.set_ylabel("Value [rad]")
+
+            self.theta_lines.append(line_est)
+
+        for ax in self.theta_axes[-4:]:
+            ax.set_xlabel("Time [min]")
+
+        handles, labels = self.theta_axes[0].get_legend_handles_labels()
+        self.fig_theta.legend(handles, labels, loc="upper center", ncol=2)
+        self.fig_theta.suptitle("Bias Parameter Tracking vs Truth (Live)", fontsize=14, weight="bold")
+        self.fig_theta.tight_layout(rect=[0, 0, 1, 0.92])
+
+    def update(self, step, theta_est, sire_lat, sire_lon, meas_lat_rad, meas_lon_rad):
 
         # ======================================================
         # 1) CLEAR TOP ROW AXES (ESTIMATED FIELDS ONLY)
@@ -215,6 +457,25 @@ class BiasFieldLivePlotterBoth:
         self.fig.canvas.flush_events()
         plt.pause(0.001)
 
+        # ------------------------------------------------------
+        # Update live theta tracking figure
+        # ------------------------------------------------------
+        time_min = step / 60.0
+        self.theta_time_hist.append(time_min)
+        self.theta_hist.append(theta_est.copy())
+
+        times = np.array(self.theta_time_hist)
+        theta_arr = np.vstack(self.theta_hist)  # (T, 12)
+
+        for i, line in enumerate(self.theta_lines):
+            line.set_data(times, theta_arr[:, i])
+            ax = self.theta_axes[i]
+            ax.relim()
+            ax.autoscale_view()
+
+        self.fig_theta.canvas.draw()
+        self.fig_theta.canvas.flush_events()
+
         # Save frame for animation
         if self.save_frames:
             frame_path = self.frame_dir / f"frame_{self.frame_count:04d}.png"
@@ -258,97 +519,3 @@ class BiasFieldLivePlotterBoth:
                 print(f"Error creating bias field animation: {e}")
         
         plt.show()
-
-
-
-# ============================================================
-#                MAIN ESTIMATOR CLASS
-# ============================================================
-
-class BiasFieldEstimatorLive:
-    """
-    Create once, then integrate into main.py with:
-
-        bias_estimator = BiasFieldEstimatorLive(NUM_SIRES, NOISE_SIGMA, SEED)
-
-        # in main loop each dt:
-        if ESTIMATE_BIAS:
-            bias_estimator.step(t)
-
-    """
-
-    def __init__(
-        self,
-        NUM_SIRES: int,
-        NOISE_SIGMA: float,
-        SEED: int = 0,
-        SAVE_FRAMES: bool = True,
-    ):
-
-        self.N = NUM_SIRES
-        self.sigma = NOISE_SIGMA
-        self.seed = SEED
-        self.rng = np.random.default_rng(SEED)
-
-        # SIREs
-        self.sire_lat, self.sire_lon = fibonacci_sites(NUM_SIRES, seed=SEED)
-
-        # Build H matrix
-        Halpha = h_alpha(self.sire_lat, self.sire_lon)
-        Helev  = h_elev(self.sire_lat, self.sire_lon)
-
-        # (2N × 11)
-        self.H = np.block([
-            [Halpha, np.zeros((self.N, 5))],
-            [np.zeros((self.N, 6)), Helev]
-        ])
-
-        # R
-        self.R = np.diag(np.full(2*self.N, self.sigma**2))
-
-        # Initial estimate
-        self.theta = np.zeros(11)
-        self.B = np.diag(np.full(11, np.deg2rad(0.4)**2))
-
-        # live plot
-        self.plotter = BiasFieldLivePlotterBoth(save_frames=SAVE_FRAMES)
-
-        # step counter
-        self.step_index = 0
-
-
-    # -----------------------------------------------------------
-    # PUBLIC METHOD CALLED FROM main.py EACH TIME STEP
-    # -----------------------------------------------------------
-    def step(self, sim_time: float):
-        """
-        Perform one 3D-Var update using noisy samples of TRUE bias field
-        at the SIRE locations.
-        """
-
-        # TRUE field at SIREs
-        BA_true, BE_true = bias_model(self.sire_lat, self.sire_lon)
-
-        # sample noisy observations
-        yA = np.deg2rad(BA_true) + self.rng.normal(0, self.sigma, size=self.N)
-        yE = np.deg2rad(BE_true) + self.rng.normal(0, self.sigma, size=self.N)
-        y = np.concatenate([yA, yE])
-
-        # 3D-Var update
-        self.theta, self.B = three_d_var_update(self.theta, self.B, self.H, y, self.R)
-
-        # live plot update
-        self.plotter.update(
-            step=sim_time,
-            theta_est=self.theta,
-            sire_lat=self.sire_lat,
-            sire_lon=self.sire_lon,
-            measA_rad=yA,
-            measE_rad=yE,
-        )
-
-        self.step_index += 1
-
-
-    def close(self):
-        self.plotter.close()

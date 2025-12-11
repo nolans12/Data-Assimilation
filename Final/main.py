@@ -19,13 +19,14 @@ rng = np.random.default_rng(SEED)
 # Whether to adjust measurements by bias field or not
 USE_BIAS = True
 # Whether to estimate bias field parameters and correct measurements by them or not
-ESTIMATE_BIAS = True
+ESTIMATE_BIAS = False
 # Number of SIRE sites for bias esimtation
-NUM_SIRES = 25
+NUM_SIRES = 100
 # Noise of estimating bias locations
-BIAS_NOISE_SIGMA = np.deg2rad(0.1) # for visual, easy to see
+# BIAS_NOISE_SIGMA = np.deg2rad(0.1) # for visual, easy to see
+BIAS_NOISE_SIGMA = 50e-6 # radians
 
-# Meas Noise (sigma)
+# Meas Noise (sigma) for EKF
 NOISE_SIGMA = 10e-6 # radians
 
 # Process Noise (sigma)
