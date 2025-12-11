@@ -5,36 +5,37 @@ import cartopy.feature as cfeature
 
 # Field we are trying to estimate
 TRUE_THETA = np.deg2rad([
-    -0.2, 0.1, 0.2, -0.15, -0.05, 0.3,   # Azimuth params
-   -0.03, 0.01, 0.03, 0.03, 0.01          # Elevation params
+    -0.1, 0.1, 0.2, -0.15, -0.05, 0.3,   # Lattiude Params
+   0, -0.2, 0.3, -0.2, 0.25, 0.15        # Longitude Params
 ])
 
 def bias_model(lat_deg, lon_deg, theta=TRUE_THETA):
     """Compute azimuth and elevation bias fields (degrees) from param vector."""
     phi, lam = np.deg2rad(lat_deg), np.deg2rad(lon_deg)
-    a0,a1,a2,a3,a4,a5,e0,e1,e2,e3,e4 = theta
+    x0,x1,x2,x3,x4,x5,x6,x7,x8,x9,x10,x11 = theta
 
-    b_alpha = (
-        a0 + a1*np.sin(phi)
-        + a2*np.cos(phi)*np.cos(lam)
-        + a3*np.cos(phi)*np.sin(lam)
-        + a4*np.sin(2*phi)*np.cos(2*lam)
-        + a5*np.sin(2*phi)*np.sin(2*lam)
+    b_lat = (
+        x0 + x1**3*np.sin(phi)
+        + x2**4*np.cos(phi)*np.cos(lam)
+        + x3**2*np.cos(phi)*np.sin(lam)
+        + x4**5*np.sin(2*phi)*np.cos(2*lam)
+        + x5*np.sin(2*phi)*np.sin(2*lam)
     )
 
-    b_elev = (
-        e0 + e1*0.5*(3*np.sin(phi)**2 - 1)
-        + e2*np.cos(phi)*np.cos(lam)
-        - e3*np.cos(phi)*np.sin(lam)
-        + e4*np.sin(2*phi)
+    b_lon = (
+        x6 + x7**3*np.sin(phi)
+        + x8**3*np.cos(phi)*np.cos(lam)
+        + x9**2*np.cos(phi)*np.sin(lam)
+        + x10**5*np.sin(2*phi)*np.cos(2*lam)
+        - x11*np.sin(0.5*phi)*np.sin(lam)
     )
 
-    return np.rad2deg(b_alpha), np.rad2deg(b_elev)
+    return np.rad2deg(b_lat), np.rad2deg(b_lon)
 
 lat = np.linspace(-90,90,181)
 lon = np.linspace(-180,180,361)
 Lon, Lat = np.meshgrid(lon, lat)
-bA, bE = bias_model(Lat, Lon)
+bLat, bLon = bias_model(Lat, Lon)
 
 
 def fibonacci_sites(n, seed=0):
@@ -72,37 +73,37 @@ def plot_sire_locations(n_sires=25, seed=0):
 
 
 def plot_field(theta=TRUE_THETA, title="True Bias Field (deg)", cmap="coolwarm"):
-    bA, bE = bias_model(Lat, Lon, theta)
+    bLat, bLon = bias_model(Lat, Lon, theta)
 
     # Plot Azimuth
-    fig_az = plt.figure(figsize=(11,5))
-    ax_az = plt.axes(projection=ccrs.Robinson(central_longitude=0))
-    ax_az.set_global()
-    ax_az.coastlines()
-    ax_az.add_feature(cfeature.BORDERS, linewidth=0.4)
-    ax_az.add_feature(cfeature.LAND, facecolor="#f4f2ec")
-    im_az = ax_az.pcolormesh(lon, lat, bA, cmap=cmap, shading="auto", transform=ccrs.PlateCarree())
-    contours_az = ax_az.contour(lon, lat, bA, levels=10, colors='black', linewidths=0.5, 
+    fig_lat = plt.figure(figsize=(11,5))
+    ax_lat = plt.axes(projection=ccrs.Robinson(central_longitude=0))
+    ax_lat.set_global()
+    ax_lat.coastlines()
+    ax_lat.add_feature(cfeature.BORDERS, linewidth=0.4)
+    ax_lat.add_feature(cfeature.LAND, facecolor="#f4f2ec")
+    im_lat = ax_lat.pcolormesh(lon, lat, bLat, cmap=cmap, shading="auto", transform=ccrs.PlateCarree())
+    contours_lat = ax_lat.contour(lon, lat, bLat, levels=10, colors='black', linewidths=0.5, 
                                 alpha=0.6, transform=ccrs.PlateCarree())
-    ax_az.clabel(contours_az, inline=True, fontsize=8, fmt='%.2f')
-    gl_az = ax_az.gridlines(draw_labels=False, linewidth=0.5, color='gray', alpha=0.5, linestyle='--')
-    plt.colorbar(im_az, ax=ax_az, orientation="horizontal", pad=0.04, label="Bias (deg)", shrink=0.8)
-    ax_az.set_title("Azimuth " + title, fontsize=13, weight="bold")
+    ax_lat.clabel(contours_lat, inline=True, fontsize=8, fmt='%.2f')
+    gl_lat = ax_lat.gridlines(draw_labels=False, linewidth=0.5, color='gray', alpha=0.5, linestyle='--')
+    plt.colorbar(im_lat, ax=ax_lat, orientation="horizontal", pad=0.04, label="Bias (deg)", shrink=0.8)
+    ax_lat.set_title("Latitude " + title, fontsize=13, weight="bold")
 
     # Plot Elevation
-    fig_el = plt.figure(figsize=(11,5))
-    ax_el = plt.axes(projection=ccrs.Robinson(central_longitude=0))
-    ax_el.set_global()
-    ax_el.coastlines()
-    ax_el.add_feature(cfeature.BORDERS, linewidth=0.4)
-    ax_el.add_feature(cfeature.LAND, facecolor="#f4f2ec")
-    im_el = ax_el.pcolormesh(lon, lat, bE, cmap=cmap, shading="auto", transform=ccrs.PlateCarree())
-    contours_el = ax_el.contour(lon, lat, bE, levels=10, colors='black', linewidths=0.5, 
+    fig_lon = plt.figure(figsize=(11,5))
+    ax_lon = plt.axes(projection=ccrs.Robinson(central_longitude=0))
+    ax_lon.set_global()
+    ax_lon.coastlines()
+    ax_lon.add_feature(cfeature.BORDERS, linewidth=0.4)
+    ax_lon.add_feature(cfeature.LAND, facecolor="#f4f2ec")
+    im_lon = ax_lon.pcolormesh(lon, lat, bLon, cmap=cmap, shading="auto", transform=ccrs.PlateCarree())
+    contours_lon = ax_lon.contour(lon, lat, bLon, levels=10, colors='black', linewidths=0.5, 
                                 alpha=0.6, transform=ccrs.PlateCarree())
-    ax_el.clabel(contours_el, inline=True, fontsize=8, fmt='%.2f')
-    gl_el = ax_el.gridlines(draw_labels=False, linewidth=0.5, color='gray', alpha=0.5, linestyle='--')
-    plt.colorbar(im_el, ax=ax_el, orientation="horizontal", pad=0.04, label="Bias (deg)", shrink=0.8)
-    ax_el.set_title("Elevation " + title, fontsize=13, weight="bold")
+    ax_lon.clabel(contours_lon, inline=True, fontsize=8, fmt='%.2f')
+    gl_lon = ax_lon.gridlines(draw_labels=False, linewidth=0.5, color='gray', alpha=0.5, linestyle='--')
+    plt.colorbar(im_lon, ax=ax_lon, orientation="horizontal", pad=0.04, label="Bias (deg)", shrink=0.8)
+    ax_lon.set_title("Longitude " + title, fontsize=13, weight="bold")
     plt.show()
 
 # plot_field()
